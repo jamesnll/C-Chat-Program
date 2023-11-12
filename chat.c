@@ -47,6 +47,9 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
 static int  socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static void socket_close(int sockfd);
 
+// Network Helper Functions
+void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port);
+
 // Signal Handling Functions
 static void setup_signal_handler(void);
 static void sigint_handler(int signum);
@@ -76,29 +79,17 @@ int main(int argc, char *argv[])
 
     sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
-    if(listen_arg)
-    {
-        int enable = 1;
-        if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) == -1)
-        {
-            perror("Setsockopt failed");
-            exit(EXIT_FAILURE);
-        }
-
-        socket_bind(sockfd, &addr, port);
-        start_listening(sockfd, SOMAXCONN);
-    }
-
     if(connect_arg)
     {
         socket_connect(sockfd, &addr, port);
     }
 
-    setup_signal_handler();
-
-    // Handle incoming client connections
     if(listen_arg)
     {
+        host_connection(sockfd, &addr, port);
+        setup_signal_handler();
+
+        // Handle incoming client connections
         while(!exit_flag)
         {
             // Client socket variables
@@ -125,7 +116,6 @@ int main(int argc, char *argv[])
 
     printf("Connect: %d\n", connect_arg);
     printf("Listen: %d\n", listen_arg);
-    printf("Sockfd: %d\n", sockfd);
 
     socket_close(sockfd);
     return EXIT_SUCCESS;
@@ -501,6 +491,27 @@ static void socket_close(int sockfd)
         perror("error closing socket");
         exit(EXIT_FAILURE);
     }
+}
+
+// Network Helper Functions
+
+/**
+ * Helper function that hosts the connection between programs.
+ * @param sockfd the socket file descriptor
+ * @param addr      a pointer to the struct sockaddr_storage containing the address
+ * @param port      the port number to host the connection
+ */
+void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port)
+{
+    int enable = 1;
+    if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) == -1)
+    {
+        perror("Setsockopt failed");
+        exit(EXIT_FAILURE);
+    }
+
+    socket_bind(sockfd, addr, port);
+    start_listening(sockfd, SOMAXCONN);
 }
 
 // Signal Handling Functions
