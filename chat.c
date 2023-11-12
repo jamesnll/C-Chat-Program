@@ -10,13 +10,11 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/wait.h>
 
 // Signal Handling
 #include <signal.h>
 
 // Standard Library
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,9 +50,9 @@ void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port);
 
 // Signal Handling Functions
 static void setup_signal_handler(void);
-static void sigint_handler(int signum);
+static void sigtstp_handler(int signum);
 
-static volatile sig_atomic_t exit_flag = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static volatile sig_atomic_t sigtstp_flag = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 // ----- Main Function -----
 
@@ -90,7 +88,7 @@ int main(int argc, char *argv[])
         setup_signal_handler();
 
         // Handle incoming client connections
-        while(!exit_flag)
+        while(!sigtstp_flag)
         {
             // Client socket variables
             int                     client_sockfd;
@@ -102,7 +100,7 @@ int main(int argc, char *argv[])
 
             if(client_sockfd == -1)
             {
-                if(exit_flag)
+                if(sigtstp_flag)
                 {
                     break;
                 }
@@ -530,8 +528,8 @@ static void setup_signal_handler(void)
     #pragma clang diagnostic ignored "-Wdisabled-macro-expansion"
 #endif
 
-    // Set the signal handler function for SIGINT (Ctrl+C) to 'sigint_handler'.
-    sa.sa_handler = sigint_handler;
+    // Set the signal handler function for SIGTSTP (Ctrl+Z) to 'sigtstp_handler'.
+    sa.sa_handler = sigtstp_handler;
 
 // Restore the previous Clang compiler warning settings.
 #if defined(__clang__)
@@ -542,7 +540,7 @@ static void setup_signal_handler(void)
     sa.sa_flags = 0;             // Set sa_flags to 0, indicating no special flags for signal handling.
 
     // Register the signal handler configuration ('sa') for the SIGINT signal.
-    if(sigaction(SIGINT, &sa, NULL) == -1)
+    if(sigaction(SIGTSTP, &sa, NULL) == -1)
     {
         perror("sigaction");
         exit(EXIT_FAILURE);
@@ -553,12 +551,12 @@ static void setup_signal_handler(void)
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 /**
- * Signal handler function for the SIGINT (Ctrl+C) signal.
- * @param signum the signal number, typically SIGINT (2) in this context
+ * Signal handler function for the SIGTSTP (Ctrl+Z) signal.
+ * @param signum the signal number, typically SIGTSTP (2) in this context
  */
-static void sigint_handler(int signum)
+static void sigtstp_handler(int signum)
 {
-    exit_flag = 1;
+    sigtstp_flag = 1;
 }
 
 #pragma GCC diagnostic pop
