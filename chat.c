@@ -66,10 +66,17 @@ int main(int argc, char *argv[])
     int                     sockfd;
     struct sockaddr_storage addr;
 
+    // Client socket variables
+    int                     client_sockfd;
+    struct sockaddr_storage client_addr;
+    socklen_t               client_addr_len;
+
     connect_arg = false;
     listen_arg  = false;
     ip_address  = NULL;
     port_str    = NULL;
+
+    client_sockfd = 0;
 
     parse_arguments(argc, argv, &connect_arg, &listen_arg, &ip_address, &port_str);
     handle_arguments(argv[0], connect_arg, listen_arg, ip_address, port_str, &port);
@@ -88,30 +95,27 @@ int main(int argc, char *argv[])
         setup_signal_handler();
 
         // Handle incoming client connections
-        while(!sigtstp_flag)
+        while(client_sockfd != 4)
         {
-            // Client socket variables
-            int                     client_sockfd;
-            struct sockaddr_storage client_addr;
-            socklen_t               client_addr_len;
-
             client_addr_len = sizeof(client_addr);
             client_sockfd   = socket_accept_connection(sockfd, &client_addr, &client_addr_len);
-
             if(client_sockfd == -1)
             {
-                if(sigtstp_flag)
-                {
-                    break;
-                }
-
-                continue;
+                perror("accept");
+                exit(EXIT_FAILURE);
             }
-
-            socket_close(client_sockfd);
         }
     }
 
+    while(!sigtstp_flag)
+    {
+        // Handle closing connection on both sides if ctrl z is pressed
+        // Create threads to manage stdin, network read/writes
+
+        printf("Client socket fd: %d\n", client_sockfd);
+        sleep(1);
+    }
+    socket_close(client_sockfd);
     printf("Connect: %d\n", connect_arg);
     printf("Listen: %d\n", listen_arg);
 
