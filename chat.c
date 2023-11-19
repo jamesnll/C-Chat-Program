@@ -143,7 +143,6 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
 
-        //        if(pthread_join(write_message_thread, NULL) == 0) {}
         pthread_join(write_message_thread, NULL);
     }
 
