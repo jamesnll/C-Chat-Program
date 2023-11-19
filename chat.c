@@ -15,6 +15,7 @@
 #include <signal.h>
 
 // Standard Library
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +25,7 @@
 // Macros
 #define UNKNOWN_OPTION_MESSAGE_LEN 24
 #define BASE_TEN 10
-// #define LINE_LENGTH 1024
+#define LINE_LENGTH 1024
 
 // ----- Function Headers -----
 
@@ -44,6 +45,8 @@ static void start_listening(int server_fd, int backlog);
 static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t port);
 static int  socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static void socket_close(int sockfd);
+static void write_to_socket(int sockfd, const char *message);
+static void read_from_socket(int sockfd);
 
 // Network Helper Functions
 void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port);
@@ -51,6 +54,10 @@ void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port);
 // Signal Handling Functions
 static void setup_signal_handler(void);
 static void sigtstp_handler(int signum);
+
+// Thread Functions
+static void *write_message(void *arg);
+static void *read_message(void *arg);
 
 static volatile sig_atomic_t sigtstp_flag = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
@@ -63,13 +70,17 @@ int main(int argc, char *argv[])
     char                   *ip_address;
     char                   *port_str;
     in_port_t               port;
-    int                     sockfd;
+    int                     host_sockfd;
     struct sockaddr_storage addr;
 
     // Client socket variables
     int                     client_sockfd;
     struct sockaddr_storage client_addr;
     socklen_t               client_addr_len;
+
+    // Threads
+    pthread_t write_message_thread;    // Gets input from stdin and writes to the network
+    pthread_t read_message_thread;     // Reads messages from network
 
     connect_arg = false;
     listen_arg  = false;
@@ -82,23 +93,23 @@ int main(int argc, char *argv[])
     handle_arguments(argv[0], connect_arg, listen_arg, ip_address, port_str, &port);
     convert_address(ip_address, &addr);
 
-    sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
+    host_sockfd = socket_create(addr.ss_family, SOCK_STREAM, 0);
 
     if(connect_arg)
     {
-        socket_connect(sockfd, &addr, port);
+        socket_connect(host_sockfd, &addr, port);
     }
 
     if(listen_arg)
     {
-        host_connection(sockfd, &addr, port);
+        host_connection(host_sockfd, &addr, port);
         setup_signal_handler();
 
         // Handle incoming client connections
         while(client_sockfd != 4)
         {
             client_addr_len = sizeof(client_addr);
-            client_sockfd   = socket_accept_connection(sockfd, &client_addr, &client_addr_len);
+            client_sockfd   = socket_accept_connection(host_sockfd, &client_addr, &client_addr_len);
             if(client_sockfd == -1)
             {
                 perror("accept");
@@ -109,17 +120,35 @@ int main(int argc, char *argv[])
 
     while(!sigtstp_flag)
     {
-        // Handle closing connection on both sides if ctrl z is pressed
-        // Create threads to manage stdin, network read/writes
+        int write_thread_result;
+        int read_thread_result;
+        int receiver_sockfd;
 
-        printf("Client socket fd: %d\n", client_sockfd);
-        sleep(1);
+        // Sets the receiving end sockfd to either client_sockfd or host_sockfd
+        // If -a is set, receiver is client, If -c is set, receiver is host
+        receiver_sockfd = listen_arg ? client_sockfd : host_sockfd;
+
+        read_thread_result  = pthread_create(&read_message_thread, NULL, read_message, (void *)&receiver_sockfd);
+        write_thread_result = pthread_create(&write_message_thread, NULL, write_message, (void *)&receiver_sockfd);
+
+        if(read_thread_result != 0)
+        {
+            perror("Read thread creation failed");
+            return EXIT_FAILURE;
+        }
+
+        if(write_thread_result != 0)
+        {
+            perror("Write thread creation failed");
+            return EXIT_FAILURE;
+        }
+
+        //        if(pthread_join(write_message_thread, NULL) == 0) {}
+        pthread_join(write_message_thread, NULL);
     }
-    socket_close(client_sockfd);
-    printf("Connect: %d\n", connect_arg);
-    printf("Listen: %d\n", listen_arg);
 
-    socket_close(sockfd);
+    socket_close(client_sockfd);
+    socket_close(host_sockfd);
     return EXIT_SUCCESS;
 }
 
@@ -564,3 +593,72 @@ static void sigtstp_handler(int signum)
 }
 
 #pragma GCC diagnostic pop
+
+static void *write_message(void *arg)
+{
+    char input[LINE_LENGTH];
+    int  sockfd = *((int *)arg);
+
+    fgets(input, sizeof(input), stdin);    // Read a line of text from stdin
+
+    write_to_socket(sockfd, input);
+
+    return NULL;
+}
+
+static void *read_message(void *arg)
+{
+    int sockfd = *((int *)arg);
+
+    read_from_socket(sockfd);
+
+    return NULL;
+}
+
+/**
+ * Writes a command string to a socket.
+ * @param sockfd   the file descriptor of the socket to write to
+ * @param command  the command string to write to the socket
+ */
+static void write_to_socket(int sockfd, const char *message)
+{
+    size_t  message_len;
+    uint8_t size;
+
+    message_len = strlen(message);
+    size        = (uint8_t)message_len;
+
+    write(sockfd, &size, sizeof(uint8_t));    // Write the size of the command
+    write(sockfd, message, message_len);      // Write the command string
+}
+
+/**
+ * Reads input from the network socket
+ * @param client_sockfd   the file descriptor for the connected client socket
+ * @param client_addr     a pointer to a struct sockaddr_storage containing client address information
+ */
+static void read_from_socket(int sockfd)
+{
+    ssize_t bytes_read;
+    char    buffer[LINE_LENGTH];
+
+    while((bytes_read = read(sockfd, buffer, sizeof(buffer))) > 0)
+    {
+        // Write to the terminal
+        if(write(STDOUT_FILENO, buffer, (size_t)bytes_read) == -1)
+        {
+            perror("write");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+/*
+ * Current issues:
+ * Host writing a client sends it indented for some reason
+ * Sending a message from client first seems to fix it
+ *
+ * Host can't close with ctrl + z, has to be ctrl + z then hit enter
+ * Closes fine on the client though
+ */
