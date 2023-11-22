@@ -71,6 +71,7 @@ int main(int argc, char *argv[])
     char                   *port_str;
     in_port_t               port;
     int                     host_sockfd;
+    int                     receiver_sockfd;
     struct sockaddr_storage addr;
 
     // Client socket variables
@@ -81,6 +82,8 @@ int main(int argc, char *argv[])
     // Threads
     pthread_t write_message_thread;    // Gets input from stdin and writes to the network
     pthread_t read_message_thread;     // Reads messages from network
+    int       read_thread_result;
+    int       write_thread_result;
 
     connect_arg = false;
     listen_arg  = false;
@@ -102,11 +105,10 @@ int main(int argc, char *argv[])
 
     if(listen_arg)
     {
-        host_connection(host_sockfd, &addr, port);
-        setup_signal_handler();
+        host_connection(host_sockfd, &addr, port);    // Call setsockopt, bind, listen
 
         // Handle incoming client connections
-        while(client_sockfd != 4)
+        while(client_sockfd == 0)
         {
             client_addr_len = sizeof(client_addr);
             client_sockfd   = socket_accept_connection(host_sockfd, &client_addr, &client_addr_len);
@@ -118,33 +120,37 @@ int main(int argc, char *argv[])
         }
     }
 
-    while(!sigtstp_flag)
+    setup_signal_handler();
+
+    // Sets the receiving end sockfd to either client_sockfd or host_sockfd
+    // If -a is set, receiver is client, If -c is set, receiver is host
+    receiver_sockfd = listen_arg ? client_sockfd : host_sockfd;
+
+    read_thread_result  = pthread_create(&read_message_thread, NULL, read_message, (void *)&receiver_sockfd);
+    write_thread_result = pthread_create(&write_message_thread, NULL, write_message, (void *)&receiver_sockfd);
+
+    if(write_thread_result != 0)
     {
-        int write_thread_result;
-        int read_thread_result;
-        int receiver_sockfd;
-
-        // Sets the receiving end sockfd to either client_sockfd or host_sockfd
-        // If -a is set, receiver is client, If -c is set, receiver is host
-        receiver_sockfd = listen_arg ? client_sockfd : host_sockfd;
-
-        read_thread_result  = pthread_create(&read_message_thread, NULL, read_message, (void *)&receiver_sockfd);
-        write_thread_result = pthread_create(&write_message_thread, NULL, write_message, (void *)&receiver_sockfd);
-
-        if(read_thread_result != 0)
-        {
-            perror("Read thread creation failed");
-            return EXIT_FAILURE;
-        }
-
-        if(write_thread_result != 0)
-        {
-            perror("Write thread creation failed");
-            return EXIT_FAILURE;
-        }
-
-        pthread_join(write_message_thread, NULL);
+        perror("Write thread creation failed");
+        return EXIT_FAILURE;
     }
+
+    if(read_thread_result != 0)
+    {
+        perror("Read thread creation failed");
+        return EXIT_FAILURE;
+    }
+
+    if(sigtstp_flag)
+    {
+        socket_close(client_sockfd);
+        socket_close(host_sockfd);
+        return EXIT_SUCCESS;
+    }
+
+    pthread_join(read_message_thread, NULL);
+    pthread_join(write_message_thread, NULL);
+    printf("Read finished\n");
 
     socket_close(client_sockfd);
     socket_close(host_sockfd);
@@ -595,23 +601,29 @@ static void sigtstp_handler(int signum)
 
 static void *write_message(void *arg)
 {
-    char input[LINE_LENGTH];
-    int  sockfd = *((int *)arg);
+    int sockfd = *((int *)arg);
 
-    fgets(input, sizeof(input), stdin);    // Read a line of text from stdin
+    while(!sigtstp_flag)
+    {
+        char input[LINE_LENGTH];
+        fgets(input, sizeof(input), stdin);
 
-    write_to_socket(sockfd, input);
+        write_to_socket(sockfd, input);
+    }
 
-    return NULL;
+    pthread_exit(NULL);
 }
 
 static void *read_message(void *arg)
 {
     int sockfd = *((int *)arg);
 
-    read_from_socket(sockfd);
+    while(!sigtstp_flag)
+    {
+        read_from_socket(sockfd);
+    }
 
-    return NULL;
+    pthread_exit(NULL);
 }
 
 /**
@@ -621,14 +633,14 @@ static void *read_message(void *arg)
  */
 static void write_to_socket(int sockfd, const char *message)
 {
-    size_t  message_len;
-    uint8_t size;
+    size_t   message_len;
+    uint16_t size;
 
     message_len = strlen(message);
-    size        = (uint8_t)message_len;
+    size        = (uint16_t)message_len;
 
-    write(sockfd, &size, sizeof(uint8_t));    // Write the size of the command
-    write(sockfd, message, message_len);      // Write the command string
+    write(sockfd, &size, sizeof(uint16_t));    // Write the size of the command
+    write(sockfd, message, message_len);       // Write the command string
 }
 
 /**
@@ -638,26 +650,35 @@ static void write_to_socket(int sockfd, const char *message)
  */
 static void read_from_socket(int sockfd)
 {
-    ssize_t bytes_read;
-    char    buffer[LINE_LENGTH];
+    ssize_t  bytes_read;
+    uint16_t size;
+    char     buffer[LINE_LENGTH];
 
-    while((bytes_read = read(sockfd, buffer, sizeof(buffer))) > 0)
+    bytes_read = read(sockfd, &size, sizeof(uint16_t));
+
+    if(bytes_read == 0)    // Check if connection is closed
     {
-        // Write to the terminal
-        if(write(STDOUT_FILENO, buffer, (size_t)bytes_read) == -1)
-        {
-            perror("write");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
+        exit(EXIT_SUCCESS);
+    }
+
+    bytes_read = read(sockfd, buffer, size);
+
+    if(bytes_read == 0)    // Check if connection is closed
+    {
+        exit(EXIT_SUCCESS);
+    }
+
+    buffer[(int)bytes_read] = '\0';
+
+    if(write(STDOUT_FILENO, buffer, strlen(buffer)) == -1)
+    {
+        perror("write");
+        close(sockfd);
+        exit(EXIT_FAILURE);
     }
 }
 
 /*
  * Current issues:
- * Host writing a client sends it indented for some reason
- * Sending a message from client first seems to fix it
- *
- * Host can't close with ctrl + z, has to be ctrl + z then hit enter
- * Closes fine on the client though
+ * Getting input with I/O redirection results in an infinite loop
  */
