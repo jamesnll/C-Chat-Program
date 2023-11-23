@@ -609,6 +609,12 @@ static void *write_message(void *arg)
         fgets(input, sizeof(input), stdin);
 
         write_to_socket(sockfd, input);
+
+        if(feof(stdin))
+        {
+            printf("\nExiting....\n");
+            exit(EXIT_SUCCESS);
+        }
     }
 
     pthread_exit(NULL);
@@ -658,6 +664,7 @@ static void read_from_socket(int sockfd)
 
     if(bytes_read == 0)    // Check if connection is closed
     {
+        printf("Exiting....\n");
         exit(EXIT_SUCCESS);
     }
 
@@ -665,6 +672,7 @@ static void read_from_socket(int sockfd)
 
     if(bytes_read == 0)    // Check if connection is closed
     {
+        printf("Exiting....\n");
         exit(EXIT_SUCCESS);
     }
 
