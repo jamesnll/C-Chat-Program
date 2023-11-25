@@ -46,7 +46,7 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
 static int  socket_accept_connection(int server_fd, struct sockaddr_storage *client_addr, socklen_t *client_addr_len);
 static void socket_close(int sockfd);
 static void write_to_socket(int sockfd, const char *message);
-static void read_from_socket(int sockfd);
+static int  read_from_socket(int sockfd);
 
 // Network Helper Functions
 void host_connection(int sockfd, struct sockaddr_storage *addr, in_port_t port);
@@ -126,8 +126,8 @@ int main(int argc, char *argv[])
     // If -a is set, receiver is client, If -c is set, receiver is host
     receiver_sockfd = listen_arg ? client_sockfd : host_sockfd;
 
-    read_thread_result  = pthread_create(&read_message_thread, NULL, read_message, (void *)&receiver_sockfd);
     write_thread_result = pthread_create(&write_message_thread, NULL, write_message, (void *)&receiver_sockfd);
+    read_thread_result  = pthread_create(&read_message_thread, NULL, read_message, (void *)&receiver_sockfd);
 
     if(write_thread_result != 0)
     {
@@ -141,16 +141,30 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if(sigtstp_flag)
+    while(!sigtstp_flag)
     {
-        socket_close(client_sockfd);
-        socket_close(host_sockfd);
-        return EXIT_SUCCESS;
+        sleep(1);
     }
 
-    pthread_join(read_message_thread, NULL);
+    write_thread_result = pthread_cancel(write_message_thread);
+
+    if(write_thread_result != 0)
+    {
+        fprintf(stderr, "Error cancelling write thread\n");
+        exit(EXIT_FAILURE);
+    }
+
+    read_thread_result = pthread_cancel(read_message_thread);
+    if(read_thread_result != 0)
+    {
+        fprintf(stderr, "Error canceling read thread\n");
+        exit(EXIT_FAILURE);
+    }
+
     pthread_join(write_message_thread, NULL);
-    printf("Read finished\n");
+    pthread_join(read_message_thread, NULL);
+
+    printf("Threads closed\n");
 
     socket_close(client_sockfd);
     socket_close(host_sockfd);
@@ -368,7 +382,7 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
         ipv4_addr->sin_port = net_port;
         vaddr               = (void *)&(((struct sockaddr_in *)addr)->sin_addr);
     }
-    // Handle IPv6
+        // Handle IPv6
     else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
@@ -491,7 +505,7 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
         ipv4_addr->sin_port = net_port;
         addr_len            = sizeof(struct sockaddr_in);
     }
-    // Handle IPv6
+        // Handle IPv6
     else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
@@ -571,7 +585,7 @@ static void setup_signal_handler(void)
 
 // Restore the previous Clang compiler warning settings.
 #if defined(__clang__)
-    #pragma clang diagnostic pop
+#pragma clang diagnostic pop
 #endif
 
     sigemptyset(&sa.sa_mask);    // Clear the sa_mask, which is used to block signals during the signal handler execution.
@@ -612,8 +626,8 @@ static void *write_message(void *arg)
 
         if(feof(stdin))
         {
-            printf("\nExiting....\n");
-            exit(EXIT_SUCCESS);
+            sigtstp_flag = 1;
+            break;
         }
     }
 
@@ -626,7 +640,13 @@ static void *read_message(void *arg)
 
     while(!sigtstp_flag)
     {
-        read_from_socket(sockfd);
+        int read_result;
+        read_result = read_from_socket(sockfd);
+
+        if(read_result == 1)
+        {
+            break;
+        }
     }
 
     pthread_exit(NULL);
@@ -654,7 +674,7 @@ static void write_to_socket(int sockfd, const char *message)
  * @param client_sockfd   the file descriptor for the connected client socket
  * @param client_addr     a pointer to a struct sockaddr_storage containing client address information
  */
-static void read_from_socket(int sockfd)
+static int read_from_socket(int sockfd)
 {
     ssize_t  bytes_read;
     uint16_t size;
@@ -664,29 +684,26 @@ static void read_from_socket(int sockfd)
 
     if(bytes_read == 0)    // Check if connection is closed
     {
-        printf("Exiting....\n");
-        exit(EXIT_SUCCESS);
+        sigtstp_flag = 1;
+        return EXIT_FAILURE;
     }
 
     bytes_read = read(sockfd, buffer, size);
 
     if(bytes_read == 0)    // Check if connection is closed
     {
-        printf("Exiting....\n");
-        exit(EXIT_SUCCESS);
+        sigtstp_flag = 1;
+        return EXIT_FAILURE;
     }
 
     buffer[(int)bytes_read] = '\0';
 
     if(write(STDOUT_FILENO, buffer, strlen(buffer)) == -1)
     {
-        perror("write");
-        close(sockfd);
-        exit(EXIT_FAILURE);
+        //        perror("write");
+        //        close(sockfd);
+        return EXIT_FAILURE;
     }
-}
 
-/*
- * Current issues:
- * Getting input with I/O redirection results in an infinite loop
- */
+    return EXIT_SUCCESS;
+}
