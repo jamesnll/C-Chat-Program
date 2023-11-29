@@ -382,7 +382,7 @@ static void socket_bind(int sockfd, struct sockaddr_storage *addr, in_port_t por
         ipv4_addr->sin_port = net_port;
         vaddr               = (void *)&(((struct sockaddr_in *)addr)->sin_addr);
     }
-        // Handle IPv6
+    // Handle IPv6
     else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
@@ -505,7 +505,7 @@ static void socket_connect(int sockfd, struct sockaddr_storage *addr, in_port_t 
         ipv4_addr->sin_port = net_port;
         addr_len            = sizeof(struct sockaddr_in);
     }
-        // Handle IPv6
+    // Handle IPv6
     else if(addr->ss_family == AF_INET6)
     {
         struct sockaddr_in6 *ipv6_addr;
@@ -585,7 +585,7 @@ static void setup_signal_handler(void)
 
 // Restore the previous Clang compiler warning settings.
 #if defined(__clang__)
-#pragma clang diagnostic pop
+    #pragma clang diagnostic pop
 #endif
 
     sigemptyset(&sa.sa_mask);    // Clear the sa_mask, which is used to block signals during the signal handler execution.
@@ -620,15 +620,14 @@ static void *write_message(void *arg)
     while(!sigtstp_flag)
     {
         char input[LINE_LENGTH];
-        fgets(input, sizeof(input), stdin);
 
-        write_to_socket(sockfd, input);
-
-        if(feof(stdin))
+        if(fgets(input, sizeof(input), stdin) == NULL)
         {
             sigtstp_flag = 1;
             break;
         }
+
+        write_to_socket(sockfd, input);
     }
 
     pthread_exit(NULL);
@@ -704,6 +703,8 @@ static int read_from_socket(int sockfd)
         //        close(sockfd);
         return EXIT_FAILURE;
     }
+
+    fflush(stdout);
 
     return EXIT_SUCCESS;
 }
