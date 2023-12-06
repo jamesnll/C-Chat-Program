@@ -164,8 +164,6 @@ int main(int argc, char *argv[])
     pthread_join(write_message_thread, NULL);
     pthread_join(read_message_thread, NULL);
 
-    printf("Threads closed\n");
-
     socket_close(client_sockfd);
     socket_close(host_sockfd);
     return EXIT_SUCCESS;
@@ -592,7 +590,7 @@ static void setup_signal_handler(void)
     sa.sa_flags = 0;             // Set sa_flags to 0, indicating no special flags for signal handling.
 
     // Register the signal handler configuration ('sa') for the SIGINT signal.
-    if(sigaction(SIGTSTP, &sa, NULL) == -1)
+    if(sigaction(SIGINT, &sa, NULL) == -1)
     {
         perror("sigaction");
         exit(EXIT_FAILURE);
@@ -621,13 +619,15 @@ static void *write_message(void *arg)
     {
         char input[LINE_LENGTH];
 
-        if(fgets(input, sizeof(input), stdin) == NULL)
+        if(fgets(input, sizeof(input), stdin) != NULL)
+        {
+            write_to_socket(sockfd, input);
+        }
+        else
         {
             sigtstp_flag = 1;
-            break;
+            exit(0);
         }
-
-        write_to_socket(sockfd, input);
     }
 
     pthread_exit(NULL);
@@ -642,9 +642,9 @@ static void *read_message(void *arg)
         int read_result;
         read_result = read_from_socket(sockfd);
 
-        if(read_result == 1)
+        if(read_result == 1 || sigtstp_flag == 1)
         {
-            break;
+            exit(0);
         }
     }
 
@@ -681,7 +681,7 @@ static int read_from_socket(int sockfd)
 
     bytes_read = read(sockfd, &size, sizeof(uint16_t));
 
-    if(bytes_read == 0)    // Check if connection is closed
+    if(bytes_read < 1)    // Check if connection is closed
     {
         sigtstp_flag = 1;
         return EXIT_FAILURE;
@@ -689,7 +689,7 @@ static int read_from_socket(int sockfd)
 
     bytes_read = read(sockfd, buffer, size);
 
-    if(bytes_read == 0)    // Check if connection is closed
+    if(bytes_read < 1)    // Check if connection is closed
     {
         sigtstp_flag = 1;
         return EXIT_FAILURE;
